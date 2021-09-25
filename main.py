@@ -1,74 +1,6 @@
-import requests
 import pandas as pd
 import time
-
-
-# gen_historical uses param ticker, range, day, and apikey to generate dataframe of stock historical data
-def gen_historical(t, a, p, d):
-
-    # generating url from params and getting from web using requests
-    api_url = f'https://api.polygon.io/v2/aggs/ticker/{t}/range/{d}/day/{p}?apiKey={a}'
-    data = requests.get(api_url).json()
-
-    # returns dataframe from results if stock data found, none if not found
-    if 'results' in data:
-        df = pd.DataFrame(data['results'])
-        return df
-    return None
-
-
-# find_similar uses param of recent and past historical to find instance most similar to recent in past
-def find_similar(c, p):
-
-    # generate dataframe where each row i is a sequence of len(c) values from p[i] to p[i+len(c)-1]
-    # this allows c to be comparable with each row in p (columns 0 - (len(c)-1))
-    comp = pd.DataFrame()
-    for x in range(len(c)):
-        comp[str(x)] = p.shift(-x)
-
-    comp.dropna(inplace=True)  # clean comp dataframe
-    c.reset_index(drop=True, inplace=True)  # reset index of c so it is aligned with comp.columns
-    comp['combo'] = 0  # add combo column to comp, initialized to 0
-
-    # iterate 0 -> len(c)
-    # comp['combo'] becomes combined diff of recent and past value when compared with each row in comp
-    # return comp['combo'] (small value indicates relation between that row and recent data)
-    for x in range(len(c)):
-        comp['combo'] = comp['combo'] + abs(comp[str(x)] - c[x])
-    return comp['combo']
-
-
-# gen_diversification uses param of two comparable stock datasets
-def gen_diversification(x, y):
-
-    # 4 arrays hold values tied to occurrences of: both stocks up, both down, and one up one down
-    dbl_up = [0, 0, 0]
-    dwn_up = [0, 0, 0]
-    up_dwn = [0, 0, 0]
-    dbl_dwn = [0, 0, 0]
-
-    # loop through all dates in compared stocks, adjust 1 of the 4 arrays above depending on relation of 2 stocks
-    for n in range(1, len(x)):
-        # if both stocks >= 0 on that day, update dbl_up array (instances+1, total_x+x[n], total_y+y[n])
-        if x[n] >= 0 and y[n] >= 0:
-            dbl_up[0] += 1
-            dbl_up[1] += x[n]
-            dbl_up[2] += y[n]
-        elif y[n] >= 0:  # x guaranteed < 0, therefore update dwn_up
-            dwn_up[0] += 1
-            dwn_up[1] += x[n]
-            dwn_up[2] += y[n]
-        elif x[n] >= 0:  # y guaranteed < 0, therefore update up_dwn
-            up_dwn[0] += 1
-            up_dwn[1] += x[n]
-            up_dwn[2] += y[n]
-        else:  # x and y guaranteed < 0, therefore update dbl_dwn
-            dbl_dwn[0] += 1
-            dbl_dwn[1] += x[n]
-            dbl_dwn[2] += y[n]
-
-    # return array w all 4 of the 3 item arrays from loop above within (shows relation between 2 stocks)
-    return [dbl_up, dwn_up, up_dwn, dbl_dwn]
+import engine
 
 
 # variables for apikey, range, and day values for url generation
@@ -90,7 +22,7 @@ stock_ends = pd.DataFrame()  # will contain end of day stock values for all stoc
 # loop through 100 stock symbols, generate api_url, and store values in big_stocks and stock_ends
 for i in range(20):
     for j in range(5):
-        single_col = gen_historical(symbols['Symbol'][(i*5)+j], api, period, days)
+        single_col = engine.gen_historical(symbols['Symbol'][(i*5)+j], api, period, days)
         if single_col is not None:
 
             # generate close values for each stock and store in stock_ends dataframe
@@ -113,12 +45,15 @@ stock_ends.dropna(axis=1, inplace=True)
 
 # variables needed for loop to store names & div matrices of values minimizing combined loss w 'item'
 div_dict = {}
+sim_dict = {}
+max_inst = 0
+max_comb = 0
 min_inst = 500
 min_comb = -500
+most_inst = ''
+most_comb = ''
 least_inst = ''
 least_comb = ''
-li_div = []
-lc_div = []
 
 for item in big_stocks.columns:
     for it in big_stocks.columns:
@@ -126,24 +61,36 @@ for item in big_stocks.columns:
         if item != it:
 
             # use gen_diversification method to get comparison data for 2 stocks (item and it)
-            div = gen_diversification(big_stocks[item], big_stocks[it])
+            div = engine.gen_diversification(big_stocks[item], big_stocks[it])
 
             # store stock w minimum instances for div[3] in all comparisons with 'item'
             if div[3][0] < min_inst:
                 min_inst = div[3][0]
                 least_inst = it
-                li_div = div
 
-            # div[3] contains instances of both stocks being negative
+            # div[3] contains instance of simultaneous loss for both stocks
             # therefore, store item with lowest negative combination for all comparisons with 'item'
             if div[3][1] + div[3][2] > min_comb:
                 min_comb = div[3][1] + div[3][2]
                 least_comb = it
-                lc_div = div
+
+            # div[0] contains instances of simultaneous growth for both stocks
+            # therefore, stock pair with most instances of div[0] have largest correlated growth
+            if div[0][0] > max_inst:
+                max_inst = div[0][0]
+                most_inst = it
+
+            # find stock pair with largest combined value of the growth magnitude from div[0]
+            if div[0][1] + div[0][2] > max_comb:
+                max_comb = div[0][1] + div[0][2]
+                most_comb = it
 
     # store 2 minimized diversification values for each item in div_dict
     div_dict[item] = {least_inst, least_comb}
-    print(div_dict)
+    sim_dict[item] = {most_inst, most_comb}
+
+print(div_dict)
+print(sim_dict)
 
 # similarity dataframe to store rep of diff between current and past periods for each stock
 similarity = pd.DataFrame()
@@ -154,5 +101,52 @@ last10 = big_stocks.iloc[-10:, :]
 
 # use find_similar method to generate similarity statistics for current and every past period for each stock 'item'
 for item in last10.columns:
-    similarity[item] = find_similar(last10[item], past_data[item])
+    similarity[item] = engine.find_similar(last10[item], past_data[item], 0.1)
 print(similarity)
+
+# use gen_indicators method to generate growth and loss dictionaries
+grow_dict = {}
+loss_dict = {}
+for index, col in big_stocks.iteritems():
+    grow_dict[index], loss_dict[index] = engine.gen_indicators(col, 10, 20)
+
+print(grow_dict)
+print(loss_dict)
+
+# initialize 2 dataframes which will be used as the growth and loss models
+grow_model_df = pd.DataFrame()
+loss_model_df = pd.DataFrame()
+
+# use concat to add the period indicating growth and loss for each item in both dicts
+# grow_model_df contains columns of all periods directly followed by large growth in dict grow
+# loss_model_df contains columns of all periods directly followed by large loss in dict grow
+for item in big_stocks.columns:
+    for i in range(len(grow_dict[item])):
+        grow_ind = big_stocks.loc[grow_dict[item][i]-20:grow_dict[item][i]-1, item]
+        grow_ind.reset_index(drop=True, inplace=True)
+        col = item + str(i)
+        grow_model_df = pd.concat([grow_model_df, grow_ind], axis=1)
+    for i in range(len(loss_dict[item])):
+        loss_ind = big_stocks.loc[loss_dict[item][i]-20:loss_dict[item][i]-1, item]
+        loss_ind.reset_index(drop=True, inplace=True)
+        col = item + str(i)
+        loss_model_df = pd.concat([loss_model_df, loss_ind], axis=1)
+print(grow_model_df)
+print(loss_model_df)
+
+# using mean on each row in dataframes, we observe average values at each day leading up to large growth/loss
+# this can become our fitted model to compare current periods with and determine if they indicate growth or loss
+grow_mean = grow_model_df.mean(axis=1)
+loss_mean = loss_model_df.mean(axis=1)
+
+# using std on each row in dataframes, we observe the average distance from the mean for each day in leadup period
+grow_std = grow_model_df.std(axis=1)
+loss_std = loss_model_df.std(axis=1)
+
+# if the mean is roughly zero then this means that the indicators were random and this model will not be useful
+# if the standard deviations are very large, then this means that the model will classify indicators too frequently
+
+print(grow_mean)
+print(loss_mean)
+print(grow_std)
+print(loss_std)
