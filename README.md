@@ -10,4 +10,4 @@ First: it attempts to diversify one's portfolio by finding the frequency and wei
 
 Second, it finds the period in a stock's history most similar to the recent period of x days and plots the two periods side by side using matplotlib
 
-* this program also calculates the percent change of each stock based on the value (percent change = current - previous / previous)
+* this program also calculates the percent change of each stock based on the value (percent change = (current - previous) / previous)
